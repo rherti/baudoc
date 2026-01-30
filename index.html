@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>BauDoc – Baustellendokumentation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="BauDoc">
+  <link rel="apple-touch-icon" href="icon-192.png">
+
+  <!-- jsPDF über CDN -->
+  <script src="https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+  <style>
+    body { font-family: system-ui, sans-serif; margin:0; padding:0; background:#f3f4f6; }
+    .container { max-width: 960px; margin:0 auto; padding:16px; }
+    @media (max-width: 600px){
+      .container { max-width: 100%; padding:12px; }
+      button { padding:10px 12px; }
+      input[type="text"], textarea { font-size:16px; } /* iOS zoom vermeiden */
+    }
+
+    .topbar { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }
+    .topbar img { height:28px; opacity:0.95; }
+
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .tab { padding:6px 10px; border-radius:999px; border:1px solid #d1d5db; background:#fff; cursor:pointer; }
+    .tab.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+
+    .card { background:#fff; border-radius:8px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
+    .row { display:flex; gap:8px; align-items:center; }
+    .row.wrap { flex-wrap:wrap; }
+    .space-between { justify-content:space-between; }
+    .grow { flex:1; }
+
+    input[type="text"], textarea { width:100%; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; box-sizing:border-box; }
+    textarea { min-height:70px; resize:vertical; }
+
+    button { padding:6px 10px; border-radius:4px; border:1px solid #d1d5db; background:#e5e7eb; cursor:pointer; }
+    button.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+    button.danger { background:#dc2626; border-color:#dc2626; color:#fff; }
+    button.small { padding:4px 8px; font-size:0.85rem; }
+    button.secondary { background:#f9fafb; }
+
+    .project-item, .doc-item { cursor:pointer; padding:6px 4px; }
+    .project-item:hover, .doc-item:hover { background:#f9fafb; }
+    .muted { color:#6b7280; font-size:0.85rem; }
+
+    .images { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .image-wrapper { position:relative; display:inline-block; }
+    .images img { width:80px; height:80px; object-fit:cover; border-radius:4px; border:1px solid #e5e7eb; }
+    .img-delete { position:absolute; top:-6px; right:-6px; background:#dc2626; color:#fff; border:none; border-radius:50%; width:18px; height:18px; font-size:10px; cursor:pointer; }
+
+    /* PDF Modal */
+    #pdfModal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:9999; }
+    #pdfModal .inner { position:absolute; inset:14px; background:#fff; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+    #pdfModal .bar { padding:10px; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; border-bottom:1px solid #e5e7eb; }
+    #pdfModal iframe { flex:1; width:100%; border:0; }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="tabs">
+        <button id="tabProjects" class="tab">Bauvorhaben</button>
+        <button id="tabArchive" class="tab">Archiv</button>
+      </div>
+      <img id="appLogo" src="logo.jpg" alt="Bühler Logo" />
+    </div>
+
+    <div id="app"></div>
+  </div>
+
+  <!-- PDF Preview Modal -->
+  <div id="pdfModal">
+    <div class="inner">
+      <div class="bar">
+        <button id="pdfClose">Schließen</button>
+        <button id="pdfOpenTab" class="secondary">In neuem Tab öffnen</button>
+        <button id="pdfDownload" class="secondary">Speichern</button>
+        <button id="pdfShare" class="primary">Teilen</button>
+      </div>
+      <iframe id="pdfFrame"></iframe>
+    </div>
+  </div>
+
+  <script>
+    /* =========================================================
+       IndexedDB Storage (statt localStorage)
+    ========================================================= */
+    const DB_NAME = "baudoc_db_v1";
+    const DB_STORE = "kv";
+    const DB_KEY = "state";
+
+    function openDb(){
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbGet(key){
+      const db = await openDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const store = tx.objectStore(DB_STORE);
+        const r = store.get(key);
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    }
+
+    async function idbSet(key, val){
+      const db = await openDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, "readwrite");
+        const store = tx.objectStore(DB_STORE);
+        const r = store.put(val, key);
+        r.onsuccess = () => resolve(true);
+        r.onerror = () => reject(r.error);
+      });
+    }
+
+    /* =========================================================
+       STATE
+    ========================================================= */
+    let state = {
+      projects: [],
+      archivedProjects: [],
+      selectedProjectId: null,
+      selectedDocId: null,
+      view: "projects"
+    };
+
+    function findProject(id){ return state.projects.find(p=>p.id===id)||null; }
+    function findDoc(project,id){ return project.docs.find(d=>d.id===id)||null; }
+    function escapeHtml(str){ return (str||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+    async function loadState(){
+      try {
+        const saved = await idbGet(DB_KEY);
+        if (saved && typeof saved === "object") {
+          // defensive defaults
+          if (!saved.projects) saved.projects = [];
+          if (!saved.archivedProjects) saved.archivedProjects = [];
+          if (!saved.view) saved.view = "projects";
+          state = saved;
+        }
+      } catch (e) {
+        console.warn("Konnte State nicht laden", e);
+      }
+    }
+
+    let saveTimer = null;
+    function saveStateDebounced(){
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try {
+          await idbSet(DB_KEY, state);
+        } catch (e) {
+          console.warn("Konnte State nicht speichern", e);
+          alert("Speichern fehlgeschlagen. Bitte Safari Speicher prüfen (Private Mode kann IndexedDB blockieren).");
+        }
+      }, 200);
+    }
+
+    /* =========================================================
+       DATUM: TT.MM.JJJJ
+    ========================================================= */
+    function formatDateDE(dateLike){
+      const dt = (dateLike instanceof Date) ? dateLike : new Date(dateLike);
+      if (isNaN(dt.getTime())) return "";
+      const dd = String(dt.getDate()).padStart(2, "0");
+      const mm = String(dt.getMonth()+1).padStart(2, "0");
+      const yyyy = dt.getFullYear();
+      return `${dd}.${mm}.${yyyy}`;
+    }
+
+    /* =========================================================
+       Logo -> DataURL (für PDF; robust ohne fetch)
+    ========================================================= */
+    let logoDataURL = null;
+    function imageElementToDataURL(imgEl){
+      try {
+        const c = document.createElement("canvas");
+        const w = imgEl.naturalWidth || imgEl.width || 1;
+        const h = imgEl.naturalHeight || imgEl.height || 1;
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(imgEl, 0, 0);
+        return c.toDataURL("image/jpeg", 0.92);
+      } catch (e) {
+        console.warn("Logo->DataURL fehlgeschlagen", e);
+        return null;
+      }
+    }
+    const appLogoEl = document.getElementById("appLogo");
+    appLogoEl.addEventListener("load", () => { logoDataURL = imageElementToDataURL(appLogoEl); });
+
+    /* =========================================================
+       EXIF-ORIENTATION FIX (JPEG) -> Pixel korrekt einbacken
+    ========================================================= */
+    function getExifOrientation(arrayBuffer){
+      try {
+        const view = new DataView(arrayBuffer);
+        if (view.byteLength < 4) return 1;
+        if (view.getUint16(0, false) !== 0xFFD8) return 1;
+
+        let offset = 2;
+        const length = view.byteLength;
+
+        while (offset < length) {
+          const marker = view.getUint16(offset, false);
+          offset += 2;
+          if (marker === 0xFFE1) {
+            offset += 2; // length
+            if (view.getUint32(offset, false) !== 0x45786966) return 1;
+            offset += 6;
+
+            const tiff = offset;
+            const endian = view.getUint16(tiff, false);
+            const little = endian === 0x4949;
+            if (!little && endian !== 0x4D4D) return 1;
+
+            const firstIFD = view.getUint32(tiff + 4, little);
+            let ifdOffset = tiff + firstIFD;
+
+            const entries = view.getUint16(ifdOffset, little);
+            ifdOffset += 2;
+
+            for (let i=0;i<entries;i++){
+              const entry = ifdOffset + i*12;
+              const tag = view.getUint16(entry, little);
+              if (tag === 0x0112) return view.getUint16(entry + 8, little);
+            }
+            return 1;
+          } else {
+            const size = view.getUint16(offset, false);
+            offset += size;
+          }
+        }
+      } catch {}
+      return 1;
+    }
+
+    function isJpegByHeader(arrayBuffer){
+      try {
+        const v = new DataView(arrayBuffer);
+        return v.byteLength >= 2 && v.getUint16(0, false) === 0xFFD8;
+      } catch { return false; }
+    }
+
+    function drawImageWithOrientation(ctx, img, orientation, w, h){
+      switch (orientation) {
+        case 2: ctx.translate(w, 0); ctx.scale(-1, 1); break;
+        case 3: ctx.translate(w, h); ctx.rotate(Math.PI); break;
+        case 4: ctx.translate(0, h); ctx.scale(1, -1); break;
+        case 5: ctx.rotate(0.5 * Math.PI); ctx.scale(1, -1); break;
+        case 6: ctx.rotate(0.5 * Math.PI); ctx.translate(0, -h); break;
+        case 7: ctx.rotate(0.5 * Math.PI); ctx.translate(w, -h); ctx.scale(-1, 1); break;
+        case 8: ctx.rotate(-0.5 * Math.PI); ctx.translate(-w, 0); break;
+      }
+      ctx.drawImage(img, 0, 0);
+    }
+
+    async function fileToCorrectedDataURL(file){
+      const buf = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = e => resolve(e.target.result);
+        r.onerror = reject;
+        r.readAsArrayBuffer(file);
+      });
+
+      const dataURL = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = e => resolve(e.target.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+
+      if (!isJpegByHeader(buf)) return dataURL;
+
+      const orientation = getExifOrientation(buf);
+      if (!orientation || orientation === 1) return dataURL;
+
+      const img = await new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload = () => resolve(im);
+        im.onerror = reject;
+        im.src = dataURL;
+      });
+
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+
+      const rotate90 = [5,6,7,8].includes(orientation);
+      const canvas = document.createElement("canvas");
+      canvas.width = rotate90 ? h : w;
+      canvas.height = rotate90 ? w : h;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return dataURL;
+
+      ctx.setTransform(1,0,0,1,0,0);
+      drawImageWithOrientation(ctx, img, orientation, w, h);
+
+      return canvas.toDataURL("image/jpeg", 0.92);
+    }
+
+    async function filesToCorrectedDataURLs(files){
+      const out = [];
+      for (const f of files) {
+        try { out.push(await fileToCorrectedDataURL(f)); }
+        catch(e){ console.warn("Bild konnte nicht gelesen werden", e); }
+      }
+      return out;
+    }
+
+    /* =========================================================
+       PDF Preview Helpers (iOS friendly)
+    ========================================================= */
+    let lastPdfBlob = null;
+    let lastPdfFilename = "dokumentation.pdf";
+    let lastPdfUrl = null;
+
+    function openPdfPreview(blob, filename){
+      lastPdfBlob = blob;
+      lastPdfFilename = filename || "dokumentation.pdf";
+
+      // cleanup old
+      if (lastPdfUrl) { try { URL.revokeObjectURL(lastPdfUrl); } catch {} }
+      lastPdfUrl = URL.createObjectURL(blob);
+
+      const modal = document.getElementById("pdfModal");
+      const frame = document.getElementById("pdfFrame");
+      frame.src = lastPdfUrl;
+      modal.style.display = "block";
+
+      document.getElementById("pdfClose").onclick = () => {
+        modal.style.display = "none";
+        frame.src = "about:blank";
+      };
+
+      document.getElementById("pdfOpenTab").onclick = () => {
+        // iOS: im neuen Tab öffnen -> system PDF viewer -> Share -> Mail/Files
+        window.open(lastPdfUrl, "_blank");
+      };
+
+      document.getElementById("pdfDownload").onclick = () => {
+        // Browser download fallback (iOS lädt oft einfach im Viewer)
+        const a = document.createElement("a");
+        a.href = lastPdfUrl;
+        a.download = lastPdfFilename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+
+      document.getElementById("pdfShare").onclick = async () => {
+        try {
+          if (!navigator.share) {
+            alert("Teilen wird von deinem Browser nicht direkt unterstützt. Nutze „In neuem Tab öffnen“ und dann das Share-Symbol im PDF-Viewer.");
+            return;
+          }
+          // Web Share Level 2: Datei teilen
+          const file = new File([lastPdfBlob], lastPdfFilename, { type: "application/pdf" });
+          await navigator.share({ files: [file], title: lastPdfFilename, text: "PDF Export aus BauDoc" });
+        } catch (e) {
+          // User cancelled etc.
+          console.warn("Share abgebrochen/fehlgeschlagen", e);
+        }
+      };
+    }
+
+    /* =========================================================
+       UI TABS
+    ========================================================= */
+    function updateTabs(){
+      const pBtn = document.getElementById("tabProjects");
+      const aBtn = document.getElementById("tabArchive");
+
+      pBtn.classList.toggle("active", state.view === "projects");
+      aBtn.classList.toggle("active", state.view === "archive");
+
+      pBtn.textContent = `Bauvorhaben (${state.projects.length})`;
+      aBtn.textContent = `Archiv (${state.archivedProjects.length})`;
+
+      pBtn.onclick = () => {
+        state.view = "projects";
+        state.selectedProjectId = null;
+        state.selectedDocId = null;
+        saveStateDebounced();
+        render();
+      };
+
+      aBtn.onclick = () => {
+        state.view = "archive";
+        state.selectedProjectId = null;
+        state.selectedDocId = null;
+        saveStateDebounced();
+        render();
+      };
+    }
+
+    /* =========================================================
+       RENDER
+    ========================================================= */
+    function render(){
+      updateTabs();
+      const app = document.getElementById("app");
+      app.innerHTML = "";
+
+      if (state.view === "archive") {
+        renderArchive(app);
+        return;
+      }
+
+      const project = state.selectedProjectId ? findProject(state.selectedProjectId) : null;
+      const doc = project && state.selectedDocId ? findDoc(project, state.selectedDocId) : null;
+
+      if (!project) renderProjectList(app);
+      else renderProjectDetail(app, project, doc);
+    }
+
+    function renderArchive(container){
+      const head = document.createElement("div");
+      head.className = "card";
+      head.innerHTML = `
+        <h1>Archiv – Bauvorhaben</h1>
+        <p class="muted">Wiederherstellen oder endgültig löschen.</p>
+      `;
+      container.appendChild(head);
+
+      const list = document.createElement("div");
+      list.className = "card";
+
+      if (!state.archivedProjects.length) {
+        list.innerHTML = `<p class="muted">Archiv ist leer.</p>`;
+        container.appendChild(list);
+        return;
+      }
+
+      state.archivedProjects.slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
+        const row = document.createElement("div");
+        row.className = "row space-between wrap";
+        row.style.padding = "6px 4px";
+        row.innerHTML = `
+          <div>
+            <strong>${escapeHtml(p.name)}</strong>
+            <div class="muted">${(p.docs||[]).length} Dokumentation(en)</div>
+          </div>
+          <div class="row">
+            <button class="small" data-a="restore">Wiederherstellen</button>
+            <button class="danger small" data-a="delete">Endgültig löschen</button>
+          </div>
+        `;
+
+        row.querySelector('[data-a="restore"]').onclick = () => {
+          state.archivedProjects = state.archivedProjects.filter(x=>x.id!==p.id);
+          state.projects.push(p);
+          saveStateDebounced();
+          render();
+        };
+
+        row.querySelector('[data-a="delete"]').onclick = () => {
+          if (!confirm(`Bauvorhaben „${p.name}“ endgültig löschen?\n\nAchtung: Alles wird gelöscht.`)) return;
+          state.archivedProjects = state.archivedProjects.filter(x=>x.id!==p.id);
+          saveStateDebounced();
+          render();
+        };
+
+        list.appendChild(row);
+      });
+
+      container.appendChild(list);
+    }
+
+    function renderProjectList(container){
+      const wrap = document.createElement("div");
+
+      const header = document.createElement("div");
+      header.className = "card";
+      header.innerHTML = `
+        <h1>Bauvorhaben</h1>
+        <div class="row wrap">
+          <div class="grow">
+            <input id="newProjectName" type="text" placeholder="Neues Bauvorhaben" />
+          </div>
+          <button class="primary" id="addP">+ Hinzufügen</button>
+        </div>`;
+      wrap.appendChild(header);
+
+      const list = document.createElement("div");
+      list.className = "card";
+
+      if (state.projects.length === 0) {
+        list.innerHTML = `<p class="muted">Noch keine Bauvorhaben.</p>`;
+      } else {
+        state.projects.slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
+          const d = document.createElement("div");
+          d.className = "row space-between project-item wrap";
+          d.innerHTML = `
+            <div>
+              <strong>${escapeHtml(p.name)}</strong>
+              <span class="muted"> (${(p.docs||[]).length})</span>
+            </div>
+            <div class="row">
+              <button class="small secondary" data-a="archive">Archivieren</button>
+            </div>
+          `;
+
+          d.onclick = (e) => {
+            if (e.target && e.target.dataset && e.target.dataset.a === "archive") return;
+            state.selectedProjectId = p.id;
+            state.selectedDocId = null;
+            saveStateDebounced();
+            render();
+          };
+
+          d.querySelector('[data-a="archive"]').onclick = (e) => {
+            e.stopPropagation();
+            if (!confirm(`Bauvorhaben „${p.name}“ ins Archiv verschieben?`)) return;
+            state.projects = state.projects.filter(x=>x.id!==p.id);
+            state.archivedProjects.push(p);
+            saveStateDebounced();
+            render();
+          };
+
+          list.appendChild(d);
+        });
+      }
+
+      wrap.appendChild(list);
+      container.appendChild(wrap);
+
+      document.getElementById("addP").onclick = () => {
+        const val = document.getElementById("newProjectName").value.trim();
+        if (!val) return;
+        state.projects.push({ id: Date.now().toString(), name: val, docs: [] });
+        saveStateDebounced();
+        render();
+      };
+    }
+
+    function renderProjectDetail(container, project, doc){
+      const head = document.createElement("div");
+      head.className = "card";
+      head.innerHTML = `
+        <div class="row space-between wrap">
+          <div class="row" style="flex:1;">
+            <button id="back">←</button>
+            <input id="projNameEdit" type="text" value="${escapeHtml(project.name)}"
+              style="font-size:1.2rem;font-weight:bold;border:1px solid #ccc;padding:4px;" />
+          </div>
+          <button class="primary small" id="newD">+ Neue Dokumentation</button>
+        </div>`;
+      container.appendChild(head);
+
+      const projInput = document.getElementById("projNameEdit");
+      projInput.addEventListener("blur", () => {
+        const val = projInput.value.trim();
+        if (val && val !== project.name) {
+          project.name = val;
+          saveStateDebounced();
+          render();
+        }
+      });
+
+      document.getElementById("back").onclick = () => {
+        state.selectedProjectId = null;
+        state.selectedDocId = null;
+        saveStateDebounced();
+        render();
+      };
+
+      document.getElementById("newD").onclick = () => {
+        const now = new Date();
+        const n = {
+          id: Date.now().toString(),
+          title: formatDateDE(now) + " neue Dokumentation",
+          date: now.toISOString(),
+          entries: []
+        };
+        project.docs.push(n);
+        state.selectedDocId = n.id;
+        saveStateDebounced();
+        render();
+      };
+
+      const list = document.createElement("div");
+      list.className = "card";
+      if ((project.docs||[]).length === 0) list.innerHTML = `<p class="muted">Noch keine Dokumentationen.</p>`;
+
+      (project.docs||[]).slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(d=>{
+        const r = document.createElement("div");
+        r.className = "row space-between doc-item";
+        r.innerHTML = `
+          <div>
+            <input type="text" class="docTitleInline" data-doc-id="${d.id}" value="${escapeHtml(d.title)}"
+              style="font-weight:bold;border:1px solid #ccc;padding:4px;" />
+            <div class="muted">${formatDateDE(d.date)}</div>
+          </div>
+          <div class="row">
+            <button class="small" data-id="${d.id}" data-a="print">PDF</button>
+            <button class="danger small" data-id="${d.id}" data-a="del">X</button>
+          </div>`;
+
+        r.onclick = e => {
+          if (e.target.dataset && e.target.dataset.a) return;
+          if (e.target.classList && e.target.classList.contains("docTitleInline")) return;
+          state.selectedDocId = d.id;
+          saveStateDebounced();
+          render();
+        };
+        list.appendChild(r);
+      });
+      container.appendChild(list);
+
+      list.querySelectorAll(".docTitleInline").forEach(input => {
+        input.addEventListener("blur", () => {
+          const id = input.getAttribute("data-doc-id");
+          const d = (project.docs||[]).find(x => x.id === id);
+          if (!d) return;
+          const val = input.value.trim();
+          if (val && val !== d.title) {
+            d.title = val;
+            saveStateDebounced();
+          }
+        });
+      });
+
+      list.querySelectorAll("button[data-id]").forEach(b => {
+        b.onclick = e => {
+          e.stopPropagation();
+          const id = b.dataset.id;
+          const action = b.dataset.a;
+          if (action === "del") {
+            if (!confirm("Dokumentation wirklich löschen?")) return;
+            project.docs = (project.docs||[]).filter(x => x.id !== id);
+            if (state.selectedDocId === id) state.selectedDocId = null;
+            saveStateDebounced();
+            render();
+          }
+          if (action === "print") generatePDF(project.id, id);
+        };
+      });
+
+      if (doc) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <h3>Dokumentation bearbeiten</h3>
+          <input id="docTitle" type="text" value="${escapeHtml(doc.title)}" />
+          <hr />
+          <h3>Neuer Eintrag</h3>
+          <textarea id="eText" placeholder="Beschreibung"></textarea>
+
+          <div class="row wrap">
+            <div class="grow">
+              <input id="eImgLib" type="file" multiple accept="image/*" />
+              <div class="muted">Mediathek / Dateien</div>
+            </div>
+            <div class="grow">
+              <input id="eImgCam" type="file" multiple accept="image/*" capture="environment" />
+              <div class="muted">Kamera</div>
+            </div>
+          </div>
+
+          <button class="primary" id="addE">+ Eintrag</button>
+          <hr />
+          <h3>Einträge</h3>
+          <div id="elist"></div>
+        `;
+        container.appendChild(card);
+
+        const docTitleInput = document.getElementById("docTitle");
+        docTitleInput.addEventListener("blur", () => {
+          const val = docTitleInput.value.trim();
+          if (val && val !== doc.title) {
+            doc.title = val;
+            saveStateDebounced();
+            render();
+          }
+        });
+
+        document.getElementById("addE").onclick = async () => {
+          await addEntry(project.id, doc.id);
+        };
+
+        renderEntriesList(document.getElementById("elist"), project, doc);
+      }
+    }
+
+    function renderEntriesList(el, project, doc){
+      el.innerHTML = "";
+      if (!doc.entries || doc.entries.length === 0) {
+        el.innerHTML = `<p class="muted">Keine Einträge.</p>`;
+        return;
+      }
+
+      doc.entries.forEach((en, i) => {
+        const c = document.createElement("div");
+        c.className = "card";
+        c.innerHTML = `
+          <div class="row space-between wrap">
+            <div style="flex:1;">
+              <label class="muted">Eintrag ${i+1}</label>
+              <textarea class="entryText" data-entry-index="${i}">${escapeHtml(en.description)}</textarea>
+              <div class="images">
+                ${(en.images||[]).map((img,idx)=>`
+                  <div class="image-wrapper">
+                    <img src="${img}" alt="Bild" />
+                    <button class="img-delete" data-entry-index="${i}" data-img-index="${idx}">×</button>
+                  </div>`).join("")}
+              </div>
+
+              <div class="row wrap" style="margin-top:6px;">
+                <div class="grow">
+                  <input type="file" class="entryImgLib" data-entry-index="${i}" multiple accept="image/*" />
+                  <div class="muted">Mediathek</div>
+                </div>
+                <div class="grow">
+                  <input type="file" class="entryImgCam" data-entry-index="${i}" multiple accept="image/*" capture="environment" />
+                  <div class="muted">Kamera</div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <button class="danger small" data-entry-del="${i}">Eintrag löschen</button>
+            </div>
+          </div>
+        `;
+        el.appendChild(c);
+      });
+
+      el.querySelectorAll(".entryText").forEach(textarea => {
+        textarea.addEventListener("blur", () => {
+          const idx = parseInt(textarea.getAttribute("data-entry-index"), 10);
+          const val = textarea.value.trim();
+          if (!doc.entries[idx]) return;
+          doc.entries[idx].description = val;
+          saveStateDebounced();
+        });
+      });
+
+      el.querySelectorAll(".img-delete").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const eIdx = parseInt(btn.getAttribute("data-entry-index"), 10);
+          const iIdx = parseInt(btn.getAttribute("data-img-index"), 10);
+          if (!doc.entries[eIdx]) return;
+          doc.entries[eIdx].images.splice(iIdx, 1);
+          saveStateDebounced();
+          render();
+        });
+      });
+
+      async function handleAddImages(inputEl, entryIdx){
+        const files = Array.from(inputEl.files || []);
+        if (!files.length || !doc.entries[entryIdx]) return;
+        const images = await filesToCorrectedDataURLs(files);
+        doc.entries[entryIdx].images = (doc.entries[entryIdx].images || []).concat(images);
+        inputEl.value = "";
+        saveStateDebounced();
+        render();
+      }
+
+      el.querySelectorAll(".entryImgLib").forEach(input => {
+        input.addEventListener("change", async () => {
+          const idx = parseInt(input.getAttribute("data-entry-index"), 10);
+          await handleAddImages(input, idx);
+        });
+      });
+      el.querySelectorAll(".entryImgCam").forEach(input => {
+        input.addEventListener("change", async () => {
+          const idx = parseInt(input.getAttribute("data-entry-index"), 10);
+          await handleAddImages(input, idx);
+        });
+      });
+
+      el.querySelectorAll("button[data-entry-del]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const idx = parseInt(btn.getAttribute("data-entry-del"), 10);
+          doc.entries.splice(idx, 1);
+          saveStateDebounced();
+          render();
+        });
+      });
+    }
+
+    async function addEntry(pid, did){
+      const p = findProject(pid);
+      const d = p ? findDoc(p, did) : null;
+      if (!d) return;
+
+      const tEl = document.getElementById("eText");
+      const lib = document.getElementById("eImgLib");
+      const cam = document.getElementById("eImgCam");
+
+      const text = (tEl.value || "").trim();
+      const files = [
+        ...Array.from((lib && lib.files) ? lib.files : []),
+        ...Array.from((cam && cam.files) ? cam.files : [])
+      ];
+
+      if (!text && files.length === 0) return;
+
+      const newEntry = { description: text, images: [] };
+      if (files.length > 0) {
+        const images = await filesToCorrectedDataURLs(files);
+        newEntry.images = images;
+      }
+
+      d.entries.push(newEntry);
+
+      // Felder leeren
+      tEl.value = "";
+      if (lib) lib.value = "";
+      if (cam) cam.value = "";
+
+      saveStateDebounced();
+      render();
+    }
+
+    /* =========================================================
+       PDF EXPORT
+       - Anschrift links + Logo rechts
+       - Bilder immer 3 Spalten breit, proportional (kein Drehen)
+       - Seitenzahlen: "Seite x von y" unten rechts
+    ========================================================= */
+    async function generatePDF(pid, did){
+      if (!window.jspdf || !window.jspdf.jsPDF) {
+        alert("PDF-Export ist nicht verfügbar (jsPDF konnte nicht geladen werden).");
+        return;
+      }
+      const { jsPDF } = window.jspdf;
+      const p = findProject(pid);
+      const d = p ? findDoc(p, did) : null;
+      if (!d) return;
+
+      const pdf = new jsPDF({ unit: "pt", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 40;
+      const maxContentWidth = pageWidth - 2 * margin;
+
+      function drawHeader(){
+        pdf.setFontSize(10);
+        pdf.text([
+          "Friedrich Bühler GmbH & Co. KG",
+          "Daimlerstraße 7+11",
+          "72213 Altensteig"
+        ], margin, margin);
+
+        if (logoDataURL) {
+          try {
+            const logoW = 150;
+            const logoH = 50;
+            pdf.addImage(logoDataURL, "JPEG", pageWidth - margin - logoW, margin - 10, logoW, logoH);
+          } catch (e) {
+            console.warn("Logo konnte nicht in PDF", e);
+          }
+        }
+
+        pdf.setDrawColor(220);
+        pdf.line(margin, margin + 55, pageWidth - margin, margin + 55);
+      }
+
+      let y = margin + 75;
+      drawHeader();
+
+      pdf.setFontSize(16);
+      pdf.text(p.name || "Bauvorhaben", margin, y);
+      y += 24;
+
+      pdf.setFontSize(13);
+      pdf.text(d.title || "Dokumentation", margin, y);
+      y += 14;
+
+      pdf.setFontSize(11);
+      pdf.setTextColor(90);
+      pdf.text("Datum: " + formatDateDE(d.date), margin, y);
+      pdf.setTextColor(0);
+      y += 20;
+
+      function newPage(){
+        pdf.addPage();
+        drawHeader();
+        y = margin + 75;
+      }
+
+      function ensureSpace(h){
+        if (y + h > pageHeight - margin) newPage();
+      }
+
+      const cols = 3;
+      const gap = 10;
+      const slotW = Math.floor((maxContentWidth - gap * (cols - 1)) / cols);
+      const maxImgH = 340;
+
+      for (let idx = 0; idx < (d.entries || []).length; idx++){
+        const en = d.entries[idx] || {};
+        const desc = en.description || "";
+
+        pdf.setFontSize(12);
+        const textLines = pdf.splitTextToSize(`${idx+1}. ${desc}`, maxContentWidth);
+        const textH = 16 + (textLines.length - 1) * 12;
+
+        const imgs = Array.isArray(en.images) ? en.images : [];
+        let infos = [];
+        if (imgs.length) {
+          infos = await Promise.all(imgs.map(src => new Promise(res => {
+            const im = new Image();
+            im.onload = () => res({ src, w: im.naturalWidth || 1, h: im.naturalHeight || 1 });
+            im.onerror = () => res({ src, w: 1, h: 1 });
+            im.src = src;
+          })));
+        }
+
+        // Text + erste Reihe zusammenhalten
+        let firstRowH = 0;
+        if (infos.length) {
+          const row = infos.slice(0, cols);
+          firstRowH = row.reduce((mx, it) => {
+            const scale = slotW / it.w;
+            let hh = it.h * scale;
+            if (hh > maxImgH) hh = maxImgH;
+            return Math.max(mx, hh);
+          }, 0);
+        }
+        const minBlockH = infos.length ? (textH + 10 + firstRowH + 10) : (textH + 10);
+        ensureSpace(minBlockH);
+
+        pdf.text(textLines, margin, y);
+        y += textH + 8;
+
+        if (infos.length) {
+          let i = 0;
+          while (i < infos.length) {
+            const row = infos.slice(i, i + cols);
+
+            let rowH = 0;
+            const dims = row.map(it => {
+              const scale = slotW / it.w;
+              let hh = it.h * scale;
+              if (hh > maxImgH) hh = maxImgH;
+              rowH = Math.max(rowH, hh);
+              return { w: slotW, h: hh };
+            });
+
+            ensureSpace(rowH + 10);
+
+            let x = margin;
+            for (let j = 0; j < row.length; j++) {
+              const it = row[j];
+              const { w, h } = dims[j];
+              try { pdf.addImage(it.src, "JPEG", x, y, w, h); }
+              catch(e) { console.warn("Bild nicht in PDF", e); }
+              x += slotW + gap;
+            }
+
+            y += rowH + 14;
+            i += row.length;
+          }
+          y += 6;
+        } else {
+          y += 8;
+        }
+      }
+
+      // Seitenzahlen
+      const totalPages = pdf.getNumberOfPages();
+      for (let pno = 1; pno <= totalPages; pno++) {
+        pdf.setPage(pno);
+        pdf.setFontSize(9);
+        pdf.setTextColor(90);
+        pdf.text(`Seite ${pno} von ${totalPages}`, pageWidth - margin, pageHeight - 20, { align: "right" });
+        pdf.setTextColor(0);
+      }
+
+      const blob = pdf.output("blob");
+      const filename = (d.title || "dokumentation") + ".pdf";
+      openPdfPreview(blob, filename);
+    }
+
+    /* =========================================================
+       START
+    ========================================================= */
+    (async function init(){
+      await loadState();
+      render();
+      // sofort einmal speichern, damit DB initial ok ist
+      saveStateDebounced();
+    })();
+  </script>
+</body>
+</html>
