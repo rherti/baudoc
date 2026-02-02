@@ -17,7 +17,25 @@
   <script src="https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 
   <style>
-    body { font-family: system-ui, sans-serif; margin:0; padding:0; background:#f3f4f6; }
+    :root{
+      --brand-red: rgb(203,49,48);      /* Firmen-Rot */
+      --brand-gray: rgb(71,70,66);      /* Firmen-Grau */
+
+      /* abgeleitete Töne für UI (dezent, gut lesbar) */
+      --brand-red-dark: rgb(165,40,39);
+      --brand-red-soft: rgba(203,49,48,0.12);
+
+      --brand-gray-900: rgb(40,40,38);
+      --brand-gray-700: rgb(71,70,66);
+      --brand-gray-200: rgb(226,226,224);
+      --brand-gray-100: rgb(244,244,243);
+
+      /* neutrale Primary-Farbe (aus Grau/Blau abgeleitet, nicht "Alarm") */
+      --brand-primary: rgb(37,99,235); /* bleibt erstmal wie bisher */
+      --brand-primary-dark: rgb(29,78,216);
+    }
+    
+    body { font-family: system-ui, sans-serif; margin:0; padding:0; background: var(--brand-gray-100); }
     .container { max-width: 960px; margin:0 auto; padding:16px; }
     @media (max-width: 600px){
       .container { max-width: 100%; padding:12px; }
@@ -29,10 +47,21 @@
     .topbar img { height:28px; opacity:0.95; }
 
     .tabs { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .tab { padding:6px 10px; border-radius:999px; border:1px solid #d1d5db; background:#fff; cursor:pointer; }
-    .tab.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+    .tab {
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid var(--brand-gray-200);
+      background:#fff;
+      cursor:pointer;
+      color: var(--brand-gray-900);
+    }
+    .tab.active{
+      background: var(--brand-gray-700);
+      border-color: var(--brand-gray-700);
+      color:#fff;
+    }
 
-    .card { background:#fff; border-radius:8px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
+    .card { background:#fff; border-radius:8px; padding:12px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.08); border: 1px solid var(--brand-grey-200); }
     .row { display:flex; gap:8px; align-items:center; }
     .row.wrap { flex-wrap:wrap; }
     .space-between { justify-content:space-between; }
@@ -42,11 +71,36 @@
     textarea { min-height:70px; resize:vertical; }
 
     button { padding:6px 10px; border-radius:4px; border:1px solid #d1d5db; background:#e5e7eb; cursor:pointer; }
-    button.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
-    button.danger { background:#dc2626; border-color:#dc2626; color:#fff; }
-    button.small { padding:4px 8px; font-size:0.85rem; }
-    button.secondary { background:#f9fafb; }
+    button.primary {
+      background: var(--brand-primary);
+      border-color: var(--brand-primary);
+      color:#fff;
+    }
+    button.primary:hover { background: var(--brand-primary-dark); border-color: var(--brand-primary-dark); }
 
+    button.danger {
+      background: var(--brand-red);
+      border-color: var(--brand-red);
+      color:#fff;
+    }
+    button.danger:hover { background: var(--brand-red-dark); border-color: var(--brand-red-dark); }
+
+    button.secondary {
+      background: #fff;
+      border-color: var(--brand-gray-200);
+    }
+    button.secondary:hover { background: var(--brand-gray-100); }
+
+    button{
+      border: 1px solid var(--brand-gray-200);
+      background: var(--brand-gray-200);
+    }
+    button:hover{
+      filter: brightness(0.98);
+    }
+
+    button.small { padding:4px 8px; font-size:0.85rem; }
+    
     .project-item, .doc-item { cursor:pointer; padding:6px 4px; }
     .project-item:hover, .doc-item:hover { background:#f9fafb; }
     .muted { color:#6b7280; font-size:0.85rem; }
@@ -61,6 +115,22 @@
     #pdfModal .inner { position:absolute; inset:14px; background:#fff; border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
     #pdfModal .bar { padding:10px; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; border-bottom:1px solid #e5e7eb; }
     #pdfModal iframe { flex:1; width:100%; border:0; }
+
+    /* ===============================
+       Optionale Corporate Akzente
+       =============================== */
+    .accent{
+      color: var(--brand-red);
+    }
+    .badge-soft-red{
+      background: var(--brand-red-soft);
+      color: var(--brand-red-dark);
+      border: 1px solid rgba(203,49,48,0.25);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+
   </style>
 </head>
 
@@ -980,6 +1050,7 @@
   </script>
 </body>
 </html>
+
 
 
 
