@@ -875,6 +875,7 @@
       const maxImgH = 340;
 
       for (let idx = 0; idx < (d.entries || []).length; idx++){
+        y += 12; //Leerzeile vor dem Eintrag
         const en = d.entries[idx] || {};
         const desc = en.description || "";
 
@@ -907,7 +908,7 @@
         ensureSpace(minBlockH);
 
         pdf.text(textLines, margin, y);
-        y += textH + 8;
+        y += textH + 3;
 
         if (infos.length) {
           let i = 0;
@@ -968,6 +969,7 @@
   </script>
 </body>
 </html>
+
 
 
 
