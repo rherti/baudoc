@@ -607,14 +607,14 @@
         r.className = "row space-between doc-item";
         r.innerHTML = `
           <div>
-            <input type="text" class="docTitleInline" data-doc-id="${d.id}" value="${escapeHtml(d.title)}"
-              style="font-weight:bold;border:1px solid #ccc;padding:4px;" />
+            <div style="font-weight:700;">${escapeHtml(d.title)}</div>
             <div class="muted">${formatDateDE(d.date)}</div>
           </div>
           <div class="row">
             <button class="small" data-id="${d.id}" data-a="print" type="button">PDF</button>
             <button class="danger small" data-id="${d.id}" data-a="del" type="button">X</button>
-          </div>`;
+          </div>
+        `;
 
         r.onclick = e => {
           if (e.target.dataset && e.target.dataset.a) return;
@@ -626,19 +626,6 @@
         list.appendChild(r);
       });
       container.appendChild(list);
-
-      list.querySelectorAll(".docTitleInline").forEach(input => {
-        input.addEventListener("blur", () => {
-          const id = input.getAttribute("data-doc-id");
-          const d = (project.docs||[]).find(x => x.id === id);
-          if (!d) return;
-          const val = input.value.trim();
-          if (val && val !== d.title) {
-            d.title = val;
-            saveStateDebounced();
-          }
-        });
-      });
 
       list.querySelectorAll("button[data-id]").forEach(b => {
         b.onclick = e => {
@@ -981,5 +968,6 @@
   </script>
 </body>
 </html>
+
 
 
