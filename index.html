@@ -195,23 +195,23 @@
     /* =========================================================
        Logo -> DataURL (für PDF)
     ========================================================= */
-    'let logoDataURL = null;
-    'function imageElementToDataURL(imgEl){
-      'try {
-        'const c = document.createElement("canvas");
-        'const w = imgEl.naturalWidth || imgEl.width || 1;
-        'const h = imgEl.naturalHeight || imgEl.height || 1;
-        'c.width = w; c.height = h;
-        'const ctx = c.getContext("2d");
-        'ctx.drawImage(imgEl, 0, 0);
-        'return c.toDataURL("image/jpeg", 0.92);
-      '} catch (e) {
-        'console.warn("Logo->DataURL fehlgeschlagen", e);
-        'return null;
-      '}
-    '}
-    'const appLogoEl = document.getElementById("appLogo");
-    'appLogoEl.addEventListener("load", () => { logoDataURL = imageElementToDataURL(appLogoEl); });
+    let logoDataURL = null;
+    function imageElementToDataURL(imgEl){
+      try {
+        const c = document.createElement("canvas");
+        const w = imgEl.naturalWidth || imgEl.width || 1;
+        const h = imgEl.naturalHeight || imgEl.height || 1;
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(imgEl, 0, 0);
+        return c.toDataURL("image/jpeg", 0.92);
+      } catch (e) {
+        console.warn("Logo->DataURL fehlgeschlagen", e);
+        return null;
+      }
+    }
+    const appLogoEl = document.getElementById("appLogo");
+    appLogoEl.addEventListener("load", () => { logoDataURL = imageElementToDataURL(appLogoEl); });
 
     /* =========================================================
        EXIF-ORIENTATION FIX (JPEG) -> Pixel korrekt einbacken
@@ -981,4 +981,5 @@
   </script>
 </body>
 </html>
+
 
