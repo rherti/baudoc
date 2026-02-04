@@ -37,7 +37,7 @@
     
     body { font-family: system-ui, sans-serif; margin:0; padding:0; background: var(--brand-gray-100); }
     .container { max-width: 960px; margin:0 auto; padding:16px; }
-    @media (ma-width: 600px){
+    @media (max-width: 600px){
       .container { max-width: 100%; padding:12px; }
       button { padding:10px 12px; }
       input[type="text"], textarea { font-size:16px; } /* iOS zoom vermeiden */
@@ -317,41 +317,48 @@
     function getExifOrientation(arrayBuffer){
       try {
         const view = new DataView(arrayBuffer);
-        if (view.byteLength < 4) return 1;
-        if (view.getUint16(0, false) !== 0xFFD8) return 1;
+        if (view.byteLength < 12) return 1;
+        if (view.getUint16(0, false) !== 0xFFD8) return 1; // JPEG SOI
 
         let offset = 2;
-        const length = view.byteLength;
-
-        while (offset < length) {
+        while (offset < view.byteLength) {
           const marker = view.getUint16(offset, false);
           offset += 2;
-          if (marker === 0xFFE1) {
-            offset += 2; // length
-            if (view.getUint32(offset, false) !== 0x45786966) return 1;
-            offset += 6;
 
-            const tiff = offset;
-            const endian = view.getUint16(tiff, false);
+          // EOI / SOS -> Ende
+          if (marker === 0xFFD9 || marker === 0xFFDA) break;
+
+          const size = view.getUint16(offset, false);
+          if (size < 2) return 1;
+
+          if (marker === 0xFFE1) { // APP1
+            const app1Start = offset + 2;
+            // "Exif\0\0"
+            if (view.getUint32(app1Start, false) !== 0x45786966) return 1;
+
+            const tiffOffset = app1Start + 6;
+            const endian = view.getUint16(tiffOffset, false);
             const little = endian === 0x4949;
             if (!little && endian !== 0x4D4D) return 1;
 
-            const firstIFD = view.getUint32(tiff + 4, little);
-            let ifdOffset = tiff + firstIFD;
+            const firstIFDOffset = view.getUint32(tiffOffset + 4, little);
+            let ifd = tiffOffset + firstIFDOffset;
 
-            const entries = view.getUint16(ifdOffset, little);
-            ifdOffset += 2;
+            const entries = view.getUint16(ifd, little);
+            ifd += 2;
 
-            for (let i=0;i<entries;i++){
-              const entry = ifdOffset + i*12;
+            for (let i = 0; i < entries; i++) {
+              const entry = ifd + i * 12;
               const tag = view.getUint16(entry, little);
-              if (tag === 0x0112) return view.getUint16(entry + 8, little);
+              if (tag === 0x0112) {
+                const val = view.getUint16(entry + 8, little);
+                return val || 1;
+              }
             }
             return 1;
-          } else {
-            const size = view.getUint16(offset, false);
-            offset += size;
           }
+
+          offset += size; // size enthält die 2 length-bytes
         }
       } catch {}
       return 1;
@@ -378,7 +385,7 @@
     }
 
     async function fileToCorrectedDataURL(file){
-      // 1) ArrayBuffer laden (für JPEG-Erkennung + EXIF)
+      // ArrayBuffer (für JPEG + EXIF)
       const buf = await new Promise((resolve, reject) => {
         const r = new FileReader();
         r.onload = e => resolve(e.target.result);
@@ -386,37 +393,35 @@
         r.readAsArrayBuffer(file);
       });
 
-      // 2) Als DataURL laden (zum Decoden ins <img>)
-      const dataURL = await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = e => resolve(e.target.result);
-        r.onerror = reject;
-        r.readAsDataURL(file);
-      });
+      // Blob URL / DataURL zum decoden
+      const blobURL = URL.createObjectURL(file);
 
-      // Nicht-JPEG -> 그대로
-      if (!isJpegByHeader(buf)) return dataURL;
-
-      // EXIF Orientation lesen
-      const orientation = getExifOrientation(buf) || 1;
-      if (orientation === 1) {
-        // trotzdem ggf. komprimieren/skalieren? (optional)
-        return dataURL;
+      let img;
+      try {
+        // createImageBitmap ist auf vielen Geräten schneller/stabiler
+        if (window.createImageBitmap) {
+          const bmp = await createImageBitmap(file);
+          img = bmp;
+        } else {
+          img = await new Promise((resolve, reject) => {
+            const im = new Image();
+            im.onload = () => resolve(im);
+            im.onerror = reject;
+            im.src = blobURL;
+          });
+        }
+      } finally {
+        // nicht sofort revoke, falls Image noch lädt (bei createImageBitmap ok)
+        setTimeout(() => { try { URL.revokeObjectURL(blobURL); } catch {} }, 1500);
       }
 
-      // Bild decoden
-      const img = await new Promise((resolve, reject) => {
-        const im = new Image();
-        im.onload = () => resolve(im);
-        im.onerror = reject;
-        im.src = dataURL;
-      });
+      const srcW = img.width || img.naturalWidth || 1;
+      const srcH = img.height || img.naturalHeight || 1;
 
-      const srcW = img.naturalWidth || img.width || 1;
-      const srcH = img.naturalHeight || img.height || 1;
+      const isJpeg = isJpegByHeader(buf);
+      const orientation = isJpeg ? (getExifOrientation(buf) || 1) : 1;
 
-      // OPTIONAL (für PDF-Größe): Upload-Bilder verkleinern + komprimieren
-      // Wenn du das NOCH NICHT willst, setze MAX_W/MAX_H sehr groß oder ratio=1
+      // Zielgröße für kleinere PDFs (kannst du anpassen)
       const MAX_W = 1800;
       const MAX_H = 1800;
       const ratio = Math.min(MAX_W / srcW, MAX_H / srcH, 1);
@@ -426,46 +431,58 @@
 
       const rotate90 = [5,6,7,8].includes(orientation);
 
+      // Canvas-Größe (nach Rotation)
       const canvas = document.createElement("canvas");
       canvas.width  = rotate90 ? drawH : drawW;
       canvas.height = rotate90 ? drawW : drawH;
 
       const ctx = canvas.getContext("2d");
-      if (!ctx) return dataURL;
+      if (!ctx) return await fileAsDataURL(file); // Fallback
 
       ctx.setTransform(1,0,0,1,0,0);
 
-      // Orientierung korrekt auf Canvas anwenden
+      // Orientierung anwenden (immer auf Zielmaße beziehen!)
       switch (orientation) {
-        case 2: // mirror horizontal
+        case 2:
           ctx.translate(drawW, 0); ctx.scale(-1, 1);
           break;
-        case 3: // rotate 180
+        case 3:
           ctx.translate(drawW, drawH); ctx.rotate(Math.PI);
           break;
-        case 4: // mirror vertical
+        case 4:
           ctx.translate(0, drawH); ctx.scale(1, -1);
           break;
-        case 5: // mirror horizontal + rotate 90 CW
+        case 5:
           ctx.rotate(0.5 * Math.PI); ctx.scale(1, -1);
           break;
-        case 6: // rotate 90 CW
+        case 6:
           ctx.rotate(0.5 * Math.PI); ctx.translate(0, -drawH);
           break;
-        case 7: // mirror horizontal + rotate 90 CCW
+        case 7:
           ctx.rotate(0.5 * Math.PI); ctx.translate(drawW, -drawH); ctx.scale(-1, 1);
           break;
-        case 8: // rotate 90 CCW
+        case 8:
           ctx.rotate(-0.5 * Math.PI); ctx.translate(-drawW, 0);
           break;
       }
 
-      // WICHTIG: immer mit Zielgröße zeichnen (sonst Clip/Verzerrung)
+      // WICHTIG: immer mit Zielmaßen zeichnen (brennt Rotation + Resize ein)
       ctx.drawImage(img, 0, 0, drawW, drawH);
 
-      // Als JPEG raus (Qualität reduziert -> PDF wird kleiner)
+      // Immer JPEG ausgeben (für jsPDF stabil), Qualität runter -> PDF kleiner
       return canvas.toDataURL("image/jpeg", 0.75);
     }
+
+    // Fallback-Helfer (falls du ihn nicht hast)
+    function fileAsDataURL(file){
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = e => resolve(e.target.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    }
+
 
     async function filesToCorrectedDataURLs(files){
       const out = [];
@@ -1075,7 +1092,10 @@
             for (let j = 0; j < row.length; j++) {
               const it = row[j];
               const { w, h } = dims[j];
-              try { pdf.addImage(it.src, "JPEG", x, y, w, h); }
+              try {
+                const fmt = (typeof it.src === "string" && it.src.startsWith("data:image/png")) ? "PNG" : "JPEG";
+                pdf.addImage(it.src, fmt, x, y, w, h);
+              } catch(e) { console.warn("Bild nicht in PDF", e); }
               catch(e) { console.warn("Bild nicht in PDF", e); }
               x += slotW + gap;
             }
@@ -1114,6 +1134,7 @@
   </script>
 </body>
 </html>
+
 
 
 
