@@ -180,6 +180,13 @@
   </div>
 
   <script>
+    window.addEventListener("error", (e) => {
+  alert("JS-Fehler: " + (e.message || "unbekannt") + "\nDatei: " + (e.filename||"") + "\nZeile: " + (e.lineno||""));
+});
+window.addEventListener("unhandledrejection", (e) => {
+  alert("Promise-Fehler: " + (e.reason?.message || e.reason || "unbekannt"));
+});
+
     /* =========================================================
        IndexedDB Storage (statt localStorage)
     ========================================================= */
@@ -1134,6 +1141,7 @@
   </script>
 </body>
 </html>
+
 
 
 
