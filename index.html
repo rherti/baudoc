@@ -408,12 +408,10 @@ window.addEventListener("unhandledrejection", (e) => {
         r.readAsDataURL(file);
       });
 
-      // Nicht-JPEG: 그대로 (optional könntest du auch PNG komprimieren, aber für iPhone JPG passt das so)
+      // Nicht-JPEG → unverändert zurück
       if (!isJpegByHeader(buf)) return dataURL;
 
-      const orientation = getExifOrientation(buf) || 1;
-
-      // 3) Bild decoden (Image-Element ist auf iOS am zuverlässigsten)
+      // 3) Bild decoden (Image ist auf iOS am stabilsten)
       const img = await new Promise((resolve, reject) => {
         const im = new Image();
         im.onload = () => resolve(im);
@@ -424,8 +422,18 @@ window.addEventListener("unhandledrejection", (e) => {
       const srcW = img.naturalWidth || img.width || 1;
       const srcH = img.naturalHeight || img.height || 1;
 
-      // 4) Resize (macht PDF massiv kleiner)
-      // iPhone Fotos sind riesig -> 1400-1600 reicht i.d.R. völlig fürs PDF
+      // 4) EXIF Orientation lesen
+      let orientation = getExifOrientation(buf) || 1;
+
+      // ✅ KRITISCHER iOS-FIX
+      // Safari dreht iPhone-JPGs oft schon beim Decoden korrekt.
+      // Wenn EXIF 5–8 sagt (90° drehen),
+      // das Bild aber bereits hochkant decodiert ist → NICHT nochmal drehen!
+      if ([5, 6, 7, 8].includes(orientation) && srcH > srcW) {
+        orientation = 1;
+      }
+
+      // 5) Resize (macht PDF viel kleiner)
       const MAX_W = 1600;
       const MAX_H = 1600;
       const ratio = Math.min(MAX_W / srcW, MAX_H / srcH, 1);
@@ -433,8 +441,8 @@ window.addEventListener("unhandledrejection", (e) => {
       const drawW = Math.round(srcW * ratio);
       const drawH = Math.round(srcH * ratio);
 
-      // 5) Canvas-Größe korrekt setzen (wichtig für Hochformat!)
-      const rotate90 = [5,6,7,8].includes(orientation);
+      // 6) Canvas-Größe (nach Rotation!)
+      const rotate90 = [5, 6, 7, 8].includes(orientation);
 
       const canvas = document.createElement("canvas");
       canvas.width  = rotate90 ? drawH : drawW;
@@ -443,48 +451,56 @@ window.addEventListener("unhandledrejection", (e) => {
       const ctx = canvas.getContext("2d");
       if (!ctx) return dataURL;
 
-      ctx.setTransform(1,0,0,1,0,0);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-      // 6) EXIF-Orientation korrekt “einbacken”
-      // WICHTIG: Transform immer auf drawW/drawH beziehen (nicht srcW/srcH)
+      // 7) EXIF-Orientation korrekt einbacken
       switch (orientation) {
         case 2: // mirror horizontal
-          ctx.translate(drawW, 0); ctx.scale(-1, 1);
+          ctx.translate(drawW, 0);
+          ctx.scale(-1, 1);
           break;
+
         case 3: // rotate 180
-          ctx.translate(drawW, drawH); ctx.rotate(Math.PI);
+          ctx.translate(drawW, drawH);
+          ctx.rotate(Math.PI);
           break;
+
         case 4: // mirror vertical
-          ctx.translate(0, drawH); ctx.scale(1, -1);
+          ctx.translate(0, drawH);
+          ctx.scale(1, -1);
           break;
+
         case 5: // mirror vertical + rotate 90 CW
           ctx.rotate(0.5 * Math.PI);
           ctx.scale(1, -1);
           break;
+
         case 6: // rotate 90 CW
           ctx.rotate(0.5 * Math.PI);
           ctx.translate(0, -drawH);
           break;
+
         case 7: // mirror horizontal + rotate 90 CW
           ctx.rotate(0.5 * Math.PI);
           ctx.translate(drawW, -drawH);
           ctx.scale(-1, 1);
           break;
+
         case 8: // rotate 90 CCW
           ctx.rotate(-0.5 * Math.PI);
           ctx.translate(-drawW, 0);
           break;
+
         default:
           break;
       }
 
-      // 7) Zeichnen in Zielgröße (dadurch stimmt Orientierung + Kompression)
+      // 8) Zeichnen (Rotation + Resize sind jetzt eingebrannt)
       ctx.drawImage(img, 0, 0, drawW, drawH);
 
-      // 8) JPEG raus – Qualität runter => PDF deutlich kleiner
+      // 9) Als JPEG zurück (kleine PDFs, jsPDF-stabil)
       return canvas.toDataURL("image/jpeg", 0.65);
     }
-
 
     // Fallback-Helfer (falls du ihn nicht hast)
     function fileAsDataURL(file){
@@ -1146,6 +1162,7 @@ window.addEventListener("unhandledrejection", (e) => {
   </script>
 </body>
 </html>
+
 
 
 
