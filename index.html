@@ -170,6 +170,20 @@
       border-radius: 999px;
       font-size: 12px;
     }
+
+    .star-btn{
+      border: none;
+      background: transparent;
+      font-size: 18px;
+      line-height: 1;
+      padding: 4px 6px;
+      cursor: pointer;
+      color: var(--brand-gray-700);
+    }
+
+    .star-btn.active{
+      color: var(--brand-primary); /* blau wie Primary */
+    }
   </style>
 </head>
 
@@ -178,7 +192,6 @@
     <div class="topbar">
       <div class="tabs">
         <button id="tabProjects" class="tab">Bauvorhaben</button>
-        <button id="tabFavorites" class="tab">Favoriten</button>
         <button id="tabArchive" class="tab">Archiv</button>
       </div>
       <img id="appLogo" src="logo.png" alt="Bühler Logo" />
@@ -553,29 +566,16 @@
     ========================================================= */
     function updateTabs(){
       const pBtn = document.getElementById("tabProjects");
-      const fBtn = document.getElementById("tabFavorites");
       const aBtn = document.getElementById("tabArchive");
 
-      const favCount = (state.projects || []).filter(p => p.fav).length;
-
       pBtn.classList.toggle("active", state.view === "projects");
-      fBtn.classList.toggle("active", state.view === "favorites");
       aBtn.classList.toggle("active", state.view === "archive");
 
       pBtn.textContent = `Bauvorhaben (${state.projects.length})`;
-      fBtn.textContent = `Favoriten (${favCount})`;
       aBtn.textContent = `Archiv (${state.archivedProjects.length})`;
 
       pBtn.onclick = () => {
         state.view = "projects";
-        state.selectedProjectId = null;
-        state.selectedDocId = null;
-        saveStateDebounced();
-        render();
-      };
-
-      fBtn.onclick = () => {
-        state.view = "favorites";
         state.selectedProjectId = null;
         state.selectedDocId = null;
         saveStateDebounced();
@@ -671,120 +671,170 @@
       container.appendChild(list);
     }
 
-    function renderProjectList(container, opts = {}){
-      const onlyFavorites = !!opts.onlyFavorites;
-
+    function renderProjectList(container){
       const wrap = document.createElement("div");
 
+      // ---------- Header (immer: Bauvorhaben + Add-Feld) ----------
       const header = document.createElement("div");
       header.className = "card";
       header.innerHTML = `
-        <h1>${onlyFavorites ? "Favoriten" : "Bauvorhaben"}</h1>
-        ${onlyFavorites ? `<p class="muted">Hier siehst du nur Projekte mit Stern.</p>` : `
+        <h1>Bauvorhaben</h1>
         <div class="row wrap">
           <div class="grow">
-            <input id="newProjectName" type="text" placeholder="Neues Bauvorhaben (nur 5-stellige Nummer)" inputmode="numeric" minlength="5" maxlength="5" />
+            <input
+              id="newProjectName"
+              type="text"
+              placeholder="Neues Bauvorhaben (nur 5-stellige Nummer)"
+              inputmode="numeric"
+              minlength="5"
+              maxlength="5"
+            />
           </div>
           <button class="primary" id="addP" type="button">+ Hinzufügen</button>
-        </div>`}
+        </div>
       `;
       wrap.appendChild(header);
 
+      // ---------- Helfer: Star-Button ----------
+      function makeStarButton(project){
+        if (typeof project.fav !== "boolean") project.fav = false;
+
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "fav-btn " + (project.fav ? "is-fav" : "");
+        b.dataset.a = "fav";
+        b.setAttribute("aria-label", "Favorit umschalten");
+        b.textContent = project.fav ? "★" : "☆";
+
+        b.onclick = (e) => {
+          e.stopPropagation();
+          project.fav = !project.fav;
+          saveStateDebounced();
+          render();
+        };
+
+        return b;
+      }
+
+      // ---------- Helfer: Projekt-Zeile ----------
+      function makeProjectRow(project){
+        const row = document.createElement("div");
+        row.className = "row space-between project-item wrap";
+
+        const left = document.createElement("div");
+        left.className = "row";
+        left.style.gap = "10px";
+        left.style.alignItems = "center";
+
+        const star = makeStarButton(project);
+
+        const info = document.createElement("div");
+        info.innerHTML = `
+          <strong>${escapeHtml(project.name)}</strong>
+          <span class="muted"> (${(project.docs||[]).length})</span>
+        `;
+
+        left.appendChild(star);
+        left.appendChild(info);
+
+        const right = document.createElement("div");
+        right.className = "row";
+
+        const archiveBtn = document.createElement("button");
+        archiveBtn.type = "button";
+        archiveBtn.className = "small secondary";
+        archiveBtn.dataset.a = "archive";
+        archiveBtn.textContent = "Archivieren";
+        archiveBtn.onclick = (e) => {
+          e.stopPropagation();
+          if (!confirm(`Bauvorhaben „${project.name}“ ins Archiv verschieben?`)) return;
+          state.projects = (state.projects || []).filter(x => x.id !== project.id);
+          state.archivedProjects = state.archivedProjects || [];
+          state.archivedProjects.push(project);
+          saveStateDebounced();
+          render();
+        };
+
+        right.appendChild(archiveBtn);
+
+        row.appendChild(left);
+        row.appendChild(right);
+
+        row.onclick = (e) => {
+          // falls irgendein Button geklickt wurde, nix öffnen
+          if (e.target && e.target.dataset && e.target.dataset.a) return;
+          state.view = "projects";
+          state.selectedProjectId = project.id;
+          state.selectedDocId = null;
+          saveStateDebounced();
+          render();
+        };
+
+        return row;
+      }
+
+      // ---------- Projekte trennen: Favoriten / Sonstige ----------
+      const projects = (state.projects || []).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+      const favProjects = projects.filter(p => !!p.fav);
+      const otherProjects = projects.filter(p => !p.fav);
+
+      // ---------- Favoriten-Block (oben) ----------
+      if (favProjects.length > 0) {
+        const favCard = document.createElement("div");
+        favCard.className = "card";
+        favCard.innerHTML = `
+          <h3 style="margin:0 0 8px 0;">Favoriten</h3>
+          <p class="muted" style="margin:0 0 10px 0;">Projekte mit Stern werden hier oben angezeigt.</p>
+        `;
+
+        favProjects.forEach(p => favCard.appendChild(makeProjectRow(p)));
+        wrap.appendChild(favCard);
+      }
+
+      // ---------- Alle Bauvorhaben (ohne Favoriten) ----------
       const list = document.createElement("div");
       list.className = "card";
 
-      const projectsToShow = (state.projects || [])
-        .slice()
-        .sort((a,b)=>a.name.localeCompare(b.name))
-        .filter(p => !onlyFavorites || p.fav);
-
-      if (projectsToShow.length === 0) {
-        list.innerHTML = onlyFavorites
-          ? `<p class="muted">Keine Favoriten gesetzt.</p>`
-          : `<p class="muted">Noch keine Bauvorhaben.</p>`;
+      if (projects.length === 0) {
+        list.innerHTML = `<p class="muted">Noch keine Bauvorhaben.</p>`;
+      } else if (otherProjects.length === 0) {
+        list.innerHTML = `<p class="muted">Alle Bauvorhaben sind Favoriten.</p>`;
       } else {
-        projectsToShow.forEach(p=>{
-          if (typeof p.fav !== "boolean") p.fav = false;
-
-          const d = document.createElement("div");
-          d.className = "row space-between project-item wrap";
-          d.innerHTML = `
-            <div class="row" style="gap:10px; align-items:center;">
-              <button class="fav-btn ${p.fav ? "is-fav" : ""}" data-a="fav" type="button" aria-label="Favorit umschalten">${p.fav ? "★" : "☆"}</button>
-              <div>
-                <strong>${escapeHtml(p.name)}</strong>
-                <span class="muted"> (${(p.docs||[]).length})</span>
-              </div>
-            </div>
-            <div class="row">
-              <button class="small secondary" data-a="archive" type="button">Archivieren</button>
-            </div>
-          `;
-
-          d.onclick = (e) => {
-            if (e.target && e.target.dataset && e.target.dataset.a) return;
-            state.view = "projects"; // beim Öffnen immer in normaler Projektansicht
-            state.selectedProjectId = p.id;
-            state.selectedDocId = null;
-            saveStateDebounced();
-            render();
-          };
-
-          d.querySelector('[data-a="fav"]').onclick = (e) => {
-            e.stopPropagation();
-            p.fav = !p.fav;
-            saveStateDebounced();
-            render();
-          };
-
-          d.querySelector('[data-a="archive"]').onclick = (e) => {
-            e.stopPropagation();
-            if (!confirm(`Bauvorhaben „${p.name}“ ins Archiv verschieben?`)) return;
-            state.projects = state.projects.filter(x=>x.id!==p.id);
-            state.archivedProjects.push(p);
-            saveStateDebounced();
-            render();
-          };
-
-          list.appendChild(d);
-        });
+        otherProjects.forEach(p => list.appendChild(makeProjectRow(p)));
       }
 
       wrap.appendChild(list);
       container.appendChild(wrap);
 
-      // Hinzufügen nur in "Bauvorhaben"
-      if (!onlyFavorites) {
-        document.getElementById("addP").onclick = () => {
-          const input = document.getElementById("newProjectName");
-          const raw = (input.value || "").trim();
+      // ---------- Hinzufügen (5-stellig, keine Doppelbelegung, auch nicht im Archiv) ----------
+      document.getElementById("addP").onclick = () => {
+        const input = document.getElementById("newProjectName");
+        const raw = (input.value || "").trim();
 
-          // nur 5 Ziffern erlauben
-          if (!/^\d{5}$/.test(raw)) {
-            alert("Bitte eine 5-stellige Bauvorhaben-Nummer eingeben (nur Ziffern).");
-            input.focus();
-            return;
-          }
+        if (!/^\d{5}$/.test(raw)) {
+          alert("Bitte eine 5-stellige Bauvorhaben-Nummer eingeben (nur Ziffern).");
+          input.focus();
+          return;
+        }
 
-          // Doppelbelegung prüfen (auch im Archiv!)
-          const exists =
-            (state.projects || []).some(p => String(p.name) === raw) ||
-            (state.archivedProjects || []).some(p => String(p.name) === raw);
+        const exists =
+          (state.projects || []).some(p => String(p.name) === raw || String(p.id) === raw) ||
+          (state.archivedProjects || []).some(p => String(p.name) === raw || String(p.id) === raw);
 
-          if (exists) {
-            alert(`Bauvorhaben ${raw} existiert bereits.`);
-            input.focus();
-            return;
-          }
+        if (exists) {
+          alert(`Bauvorhaben ${raw} existiert bereits.`);
+          input.focus();
+          return;
+        }
 
-          // Wenn du die Nummer auch als technische ID nutzen willst:
-          state.projects.push({ id: raw, name: raw, docs: [], fav: false });
+        // Nummer als ID + Name
+        state.projects = state.projects || [];
+        state.projects.push({ id: raw, name: raw, docs: [], fav: false });
 
-          input.value = "";
-          saveStateDebounced();
-          render();
-        };
-      }
+        input.value = "";
+        saveStateDebounced();
+        render();
+      };
     }
 
     function renderProjectDetail(container, project, doc){
@@ -1205,5 +1255,6 @@
   </script>
 </body>
 </html>
+
 
 
